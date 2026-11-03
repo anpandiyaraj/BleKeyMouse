@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.BluetoothSearching
+import androidx.compose.material.icons.automirrored.rounded.BluetoothSearching
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -148,7 +148,7 @@ fun DeviceListScreen(viewModel: MainViewModel) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.BluetoothSearching,
+                        imageVector = Icons.AutoMirrored.Rounded.BluetoothSearching,
                         contentDescription = null,
                         tint = CyanGlow,
                         modifier = Modifier.size(18.dp)
@@ -242,7 +242,7 @@ private fun EmptyDevicesPlaceholder() {
             .padding(vertical = 48.dp)
     ) {
         Icon(
-            imageVector = Icons.Rounded.BluetoothSearching,
+            imageVector = Icons.AutoMirrored.Rounded.BluetoothSearching,
             contentDescription = null,
             tint = TextSecondary.copy(alpha = 0.4f),
             modifier = Modifier.size(56.dp)
