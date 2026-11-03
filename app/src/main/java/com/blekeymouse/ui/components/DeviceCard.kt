@@ -1,0 +1,178 @@
+package com.blekeymouse.ui.components
+
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.BluetoothConnected
+import androidx.compose.material.icons.rounded.BluetoothDisabled
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.blekeymouse.data.ConnectionState
+import com.blekeymouse.ui.theme.BorderSubtle
+import com.blekeymouse.ui.theme.CyanGlow
+import com.blekeymouse.ui.theme.GradientEnd
+import com.blekeymouse.ui.theme.GradientStart
+import com.blekeymouse.ui.theme.GreenConnected
+import com.blekeymouse.ui.theme.SurfaceElevated
+import com.blekeymouse.ui.theme.TextSecondary
+
+/**
+ * Card representing a single paired Bluetooth device.
+ *
+ * Shows the device name, MAC address, a connection state badge,
+ * and a "Connect" button when not already connected to this device.
+ */
+@Composable
+fun DeviceCard(
+    deviceName: String,
+    deviceAddress: String,
+    connectionState: ConnectionState,
+    isThisDeviceActive: Boolean,
+    onConnectClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (isThisDeviceActive) 1f else 0.8f,
+        animationSpec = tween(300),
+        label = "cardAlpha"
+    )
+
+    val borderBrush = if (isThisDeviceActive) {
+        Brush.linearGradient(listOf(GradientStart, GradientEnd))
+    } else {
+        Brush.linearGradient(listOf(BorderSubtle, BorderSubtle))
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .alpha(cardAlpha)
+            .clip(RoundedCornerShape(16.dp))
+            .background(SurfaceElevated)
+            .border(
+                width = if (isThisDeviceActive) 1.5.dp else 1.dp,
+                brush = borderBrush,
+                shape = RoundedCornerShape(16.dp)
+            )
+            .padding(16.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // ── Device Icon ──────────────────────────────────────────────
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isThisDeviceActive)
+                            Brush.radialGradient(listOf(CyanGlow.copy(alpha = 0.2f), CyanGlow.copy(alpha = 0f)))
+                        else
+                            Brush.radialGradient(listOf(BorderSubtle.copy(alpha = 0.3f), BorderSubtle.copy(alpha = 0f)))
+                    )
+            ) {
+                Icon(
+                    imageVector = when {
+                        connectionState is ConnectionState.Connected && isThisDeviceActive ->
+                            Icons.Rounded.BluetoothConnected
+                        connectionState is ConnectionState.Disconnected ->
+                            Icons.Rounded.BluetoothDisabled
+                        else -> Icons.Rounded.Bluetooth
+                    },
+                    contentDescription = null,
+                    tint = if (isThisDeviceActive) CyanGlow else TextSecondary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            // ── Device Info ──────────────────────────────────────────────
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = deviceName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = deviceAddress,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                StatusBadge(connectionState = if (isThisDeviceActive) connectionState else ConnectionState.Disconnected)
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // ── Connect Button ───────────────────────────────────────────
+            if (!isThisDeviceActive) {
+                Button(
+                    onClick = onConnectClick,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CyanGlow.copy(alpha = 0.15f),
+                        contentColor = CyanGlow
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Text(
+                        text = "Connect",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    // Pulsing connected dot
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(GreenConnected)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Active",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = GreenConnected,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
+}
