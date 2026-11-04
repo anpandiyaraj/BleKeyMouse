@@ -230,18 +230,19 @@ fun DeviceListScreen(viewModel: MainViewModel) {
                         enter = fadeIn(tween(300 + index * 80)) +
                                 slideInVertically(tween(300 + index * 80)) { 30 }
                     ) {
-                        val isActive = device.address == connectedAddress
                         val isAutoConnectTarget = device.address.equals(autoConnectAddress, ignoreCase = true)
+                        val isActive = device.address == connectedAddress || (isAutoConnectTarget && (connectionState is ConnectionState.Connecting || connectionState is ConnectionState.Error))
                         DeviceCard(
-                            deviceName           = try { device.name ?: device.address } catch (e: SecurityException) { device.address },
+                            deviceName           = try { device.name ?: device.address } catch (_: SecurityException) { device.address },
                             deviceAddress        = device.address,
-                            connectionState      = connectionState,
+                            connectionState      = if (isActive) connectionState else ConnectionState.Disconnected,
                             isThisDeviceActive   = isActive,
                             isAutoConnectTarget  = isAutoConnectTarget,
                             onAutoConnectToggle  = { checked ->
                                 viewModel.setAutoConnectDevice(device.address, checked)
                             },
-                            onConnectClick       = { viewModel.connectTo(device) }
+                            onConnectClick       = { viewModel.connectTo(device) },
+                            onDisconnectClick    = { viewModel.disconnect() }
                         )
                     }
                 }

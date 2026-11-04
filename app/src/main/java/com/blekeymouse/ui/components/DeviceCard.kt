@@ -61,6 +61,7 @@ fun DeviceCard(
     isAutoConnectTarget: Boolean,
     onAutoConnectToggle: (Boolean) -> Unit,
     onConnectClick: () -> Unit,
+    onDisconnectClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val cardAlpha by animateFloatAsState(
@@ -69,8 +70,10 @@ fun DeviceCard(
         label = "cardAlpha"
     )
 
-    val borderBrush = if (isThisDeviceActive) {
+    val borderBrush = if (isThisDeviceActive && connectionState is ConnectionState.Connected) {
         Brush.linearGradient(listOf(GradientStart, GradientEnd))
+    } else if (isThisDeviceActive && connectionState is ConnectionState.Error) {
+        Brush.linearGradient(listOf(com.blekeymouse.ui.theme.RedError, BorderSubtle))
     } else if (isAutoConnectTarget) {
         Brush.linearGradient(listOf(CyanGlow.copy(alpha = 0.5f), BorderSubtle))
     } else {
@@ -144,8 +147,23 @@ fun DeviceCard(
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                // ── Connect Button ───────────────────────────────────────────
-                if (!isThisDeviceActive) {
+                // ── Connect / Disconnect Action Button ───────────────────────
+                if (isThisDeviceActive && (connectionState is ConnectionState.Connected || connectionState is ConnectionState.Connecting)) {
+                    Button(
+                        onClick = { onDisconnectClick?.invoke() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = com.blekeymouse.ui.theme.RedError.copy(alpha = 0.15f),
+                            contentColor = com.blekeymouse.ui.theme.RedError
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Text(
+                            text = "Disconnect",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                } else {
                     Button(
                         onClick = onConnectClick,
                         colors = ButtonDefaults.buttonColors(
@@ -155,28 +173,8 @@ fun DeviceCard(
                         shape = RoundedCornerShape(10.dp),
                     ) {
                         Text(
-                            text = "Connect",
+                            text = if (isThisDeviceActive && connectionState is ConnectionState.Error) "Retry" else "Connect",
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                } else {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        // Pulsing connected dot
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(GreenConnected)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Active",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = GreenConnected,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
