@@ -240,14 +240,14 @@ class HidProfileManager(
             _connectionState.value = ConnectionState.Error("HID Proxy Disconnected")
             return
         }
-        Log.i(TAG, "registerApp: registering HID application with Bluetooth stack")
 
-        try {
-            // Unregister any previous stale instance before registering
-            hid.unregisterApp()
-        } catch (e: Exception) {
-            Log.d(TAG, "registerApp: unregisterApp cleanup ignored", e)
+        if (_isAppRegistered.value) {
+            Log.i(TAG, "registerApp: app is already registered with Bluetooth stack")
+            _connectionState.value = ConnectionState.Disconnected
+            return
         }
+
+        Log.i(TAG, "registerApp: registering HID application with Bluetooth stack")
 
         val success = try {
             hid.registerApp(
@@ -267,18 +267,9 @@ class HidProfileManager(
             false
         }
 
+        Log.i(TAG, "registerApp call result=$success")
         if (!success) {
-            Log.e(TAG, "registerApp returned false!")
             _connectionState.value = ConnectionState.Error("HID registration failed")
-        } else {
-            // Schedule safety timeout: if system callback doesn't fire within 3s, transition out of Registering
-            Executors.newSingleThreadScheduledExecutor().schedule({
-                if (_connectionState.value == ConnectionState.Registering) {
-                    Log.w(TAG, "registerApp: callback timed out after 3s — forcing state to Disconnected")
-                    _isAppRegistered.value = true
-                    _connectionState.value = ConnectionState.Disconnected
-                }
-            }, 3, TimeUnit.SECONDS)
         }
     }
 
