@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit
 @SuppressLint("MissingPermission")
 class HidProfileManager(
     private val bluetoothAdapter: BluetoothAdapter,
+    private val shouldAutoConnectToPluggedHost: (BluetoothDevice) -> Boolean = { false },
     private val onDeviceConnected: (BluetoothDevice) -> Unit,
     private val onDeviceDisconnected: (BluetoothDevice) -> Unit,
 ) {
@@ -61,6 +62,13 @@ class HidProfileManager(
     var connectedHost: BluetoothDevice? = null
         private set
 
+    /** Host we've requested / are receiving an in-progress HID connection from. */
+    @Volatile
+    private var connectingDevice: BluetoothDevice? = null
+
+    private fun BluetoothDevice.safeName(): String =
+        try { name ?: address } catch (_: SecurityException) { address }
+
     // Dedicated single-thread executor for profile proxy callbacks (avoids main thread blocking)
     private val callbackExecutor: Executor = Executors.newSingleThreadExecutor()
 
@@ -81,20 +89,30 @@ class HidProfileManager(
             Log.i(TAG, "onAppStatusChanged: registered=$registered, device=${pluggedDevice?.address}")
             _isAppRegistered.value = registered
             if (!registered) {
+                connectedHost = null
+                connectingDevice = null
+                reportSender.detach()
                 _connectionState.value = ConnectionState.Disconnected
-            } else {
-                if (_connectionState.value == ConnectionState.Registering) {
-                    _connectionState.value = ConnectionState.Disconnected
+                return
+            }
+
+            if (_connectionState.value == ConnectionState.Registering) {
+                _connectionState.value = ConnectionState.Disconnected
+            }
+
+            // `pluggedDevice` is the host that the OS Bluetooth stack remembers as virtually
+            // cabled. Only open the HID channel automatically if the user has selected this
+            // device for Auto-Connect — if no device is selected for Auto-Connect, stay idle.
+            if (pluggedDevice != null && shouldAutoConnectToPluggedHost(pluggedDevice)) {
+                val state = try {
+                    hidDevice?.getConnectionState(pluggedDevice)
+                } catch (_: Exception) { null }
+                if (state != BluetoothProfile.STATE_CONNECTED && state != BluetoothProfile.STATE_CONNECTING) {
+                    Log.i(TAG, "onAppStatusChanged: plugged host ${pluggedDevice.address} matches Auto-Connect target — connecting")
+                    connectToDevice(pluggedDevice)
                 }
-                if (pluggedDevice != null) {
-                    connectedHost = pluggedDevice
-                    reportSender.attach(hidDevice!!)
-                    _connectionState.value = ConnectionState.Connected(
-                        deviceName = try { pluggedDevice.name ?: pluggedDevice.address } catch (_: SecurityException) { pluggedDevice.address },
-                        deviceAddress = pluggedDevice.address
-                    )
-                    onDeviceConnected(pluggedDevice)
-                }
+            } else if (pluggedDevice != null) {
+                Log.i(TAG, "onAppStatusChanged: plugged host ${pluggedDevice.address} ignored (Auto-Connect not enabled for this device)")
             }
         }
 
@@ -102,33 +120,57 @@ class HidProfileManager(
             Log.i(TAG, "onConnectionStateChanged: device=${device.address}, state=$state")
             when (state) {
                 BluetoothProfile.STATE_CONNECTED -> {
+                    val hid = hidDevice ?: return
                     connectedHost = device
-                    reportSender.attach(hidDevice!!)
+                    connectingDevice = null
+                    reportSender.attach(hid)
                     _connectionState.value = ConnectionState.Connected(
-                        deviceName  = device.name ?: device.address,
+                        deviceName  = device.safeName(),
                         deviceAddress = device.address
                     )
                     onDeviceConnected(device)
                 }
                 BluetoothProfile.STATE_CONNECTING -> {
-                    _connectionState.value = ConnectionState.Connecting(
-                        deviceName = device.name ?: device.address
-                    )
+                    connectingDevice = device
+                    // Don't downgrade an existing live connection to another host in the UI.
+                    if (connectedHost == null) {
+                        _connectionState.value = ConnectionState.Connecting(
+                            deviceName = device.safeName()
+                        )
+                    }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    val wasConnecting = _connectionState.value is ConnectionState.Connecting
-                    connectedHost = null
-                    reportSender.detach()
-                    if (wasConnecting) {
-                        Log.w(TAG, "Connection attempt to ${device.address} failed/rejected by remote device")
-                        _connectionState.value = ConnectionState.Error("Target host rejected HID connection")
-                    } else {
-                        _connectionState.value = ConnectionState.Disconnected
+                    val wasConnectedHost = connectedHost?.address.equals(device.address, ignoreCase = true)
+                    val wasConnecting = connectingDevice?.address.equals(device.address, ignoreCase = true)
+
+                    // FIX: Only tear down state for the device this event is about.
+                    // Previously ANY device's DISCONNECTED event (e.g. a failed connect to a
+                    // headset) wiped the active host and detached the report sender.
+                    if (!wasConnectedHost && !wasConnecting) {
+                        Log.d(TAG, "Ignoring DISCONNECTED for unrelated device ${device.address}")
+                        return
+                    }
+
+                    if (wasConnecting) connectingDevice = null
+                    if (wasConnectedHost) {
+                        connectedHost = null
+                        reportSender.detach()
+                    }
+
+                    if (connectedHost == null) {
+                        if (wasConnecting && !wasConnectedHost) {
+                            Log.w(TAG, "Connection attempt to ${device.address} failed/rejected by remote device")
+                            _connectionState.value = ConnectionState.Error(
+                                "Host rejected HID connection — unpair the phone on the host and pair again"
+                            )
+                        } else {
+                            _connectionState.value = ConnectionState.Disconnected
+                        }
                     }
                     onDeviceDisconnected(device)
                 }
                 BluetoothProfile.STATE_DISCONNECTING -> {
-                    _connectionState.value = ConnectionState.Disconnected
+                    // Transitional — wait for STATE_DISCONNECTED to clean up.
                 }
             }
         }
@@ -140,6 +182,10 @@ class HidProfileManager(
         override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
             Log.d(TAG, "onGetReport: type=$type, id=$id, bufferSize=$bufferSize")
             val hid = hidDevice ?: return
+            if (type != BluetoothHidDevice.REPORT_TYPE_INPUT) {
+                hid.reportError(device, BluetoothHidDevice.ERROR_RSP_UNSUPPORTED_REQ)
+                return
+            }
             when (id) {
                 HidDescriptors.MOUSE_REPORT_ID -> {
                     val report = ByteArray(HidDescriptors.MOUSE_PAYLOAD_SIZE) { 0 }
@@ -149,13 +195,26 @@ class HidProfileManager(
                     val report = ByteArray(HidDescriptors.KEYBOARD_PAYLOAD_SIZE) { 0 }
                     hid.replyReport(device, type, id, report)
                 }
-                else -> hid.reportError(device, BluetoothHidDevice.ERROR_RSP_UNSUPPORTED_REQ)
+                HidDescriptors.CONSUMER_REPORT_ID -> {
+                    val report = ByteArray(HidDescriptors.CONSUMER_PAYLOAD_SIZE) { 0 }
+                    hid.replyReport(device, type, id, report)
+                }
+                else -> hid.reportError(device, BluetoothHidDevice.ERROR_RSP_INVALID_RPT_ID)
             }
         }
 
+        /**
+         * FIX: SET_REPORT must be answered with a HANDSHAKE (SUCCESSFUL), not a DATA packet.
+         * Echoing data back via replyReport() violates the HID spec and causes hosts
+         * (Windows/macOS sending keyboard LED state) to time out and drop the connection.
+         */
         override fun onSetReport(device: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) {
-            Log.d(TAG, "onSetReport: type=$type, id=$id")
-            hidDevice?.replyReport(device, type, id, data) // echo back as ACK
+            Log.d(TAG, "onSetReport: type=$type, id=$id, data=${data.contentToString()}")
+            hidDevice?.reportError(device, BluetoothHidDevice.ERROR_RSP_SUCCESS)
+        }
+
+        override fun onSetProtocol(device: BluetoothDevice, protocol: Byte) {
+            Log.i(TAG, "onSetProtocol: protocol=$protocol (0=boot, 1=report)")
         }
 
         override fun onInterruptData(device: BluetoothDevice, reportId: Byte, data: ByteArray) {
@@ -166,6 +225,7 @@ class HidProfileManager(
         override fun onVirtualCableUnplug(device: BluetoothDevice) {
             Log.i(TAG, "onVirtualCableUnplug: device=${device.address}")
             connectedHost = null
+            connectingDevice = null
             reportSender.detach()
             _connectionState.value = ConnectionState.Disconnected
         }
@@ -190,6 +250,8 @@ class HidProfileManager(
             Log.w(TAG, "HID profile proxy disconnected")
             _isAppRegistered.value = false
             hidDevice = null
+            connectedHost = null
+            connectingDevice = null
             reportSender.detach()
             _connectionState.value = ConnectionState.Disconnected
         }
@@ -293,6 +355,8 @@ class HidProfileManager(
             Log.w(TAG, "reRegisterApp: error closing old proxy", e)
         }
         hidDevice = null
+        connectedHost = null
+        connectingDevice = null
         reportSender.detach()
         initialize(context)
     }
@@ -330,7 +394,14 @@ class HidProfileManager(
 
         Log.i(TAG, "connectToDevice: calling hidDevice.connect(${device.address})")
         return try {
-            hid.connect(device)
+            // The HID Device role supports a single host — drop any other active host first.
+            connectedHost?.takeIf { !it.address.equals(device.address, ignoreCase = true) }?.let { old ->
+                Log.i(TAG, "connectToDevice: disconnecting current host ${old.address} first")
+                try { hid.disconnect(old) } catch (_: Exception) {}
+            }
+            val ok = hid.connect(device)
+            if (ok) connectingDevice = device
+            ok
         } catch (e: SecurityException) {
             Log.e(TAG, "connectToDevice: BLUETOOTH_CONNECT permission missing", e)
             _connectionState.value = ConnectionState.Error("Permission denied")

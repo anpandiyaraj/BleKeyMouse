@@ -48,6 +48,7 @@ class BluetoothHidRepository(private val appContext: Context) {
         private const val KEY_PREFERRED_DEVICE_ADDRESS = "preferred_device_address"
         private const val KEY_AUTO_CONNECT_ENABLED = "auto_connect_enabled"
         private const val KEY_AUTO_CONNECT_DEVICE_ADDRESS = "auto_connect_device_address"
+        private const val KEY_AIR_MOUSE_SENSITIVITY = "air_mouse_sensitivity"
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -72,7 +73,12 @@ class BluetoothHidRepository(private val appContext: Context) {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             val binder = service as BluetoothHidService.LocalBinder
             val svc = binder.getService()
+            svc.onServiceDestroyed = {
+                _boundService.value = null
+                _isServiceRunning.value = false
+            }
             _boundService.value = svc
+            _isServiceRunning.value = true
             Log.i(TAG, "Bound to BluetoothHidService")
 
             // If a connect was requested while binding was in flight, execute it now
@@ -106,27 +112,53 @@ class BluetoothHidRepository(private val appContext: Context) {
 
     fun getAutoConnectDeviceAddress(): String? = getAutoConnectDeviceAddressInternal()
 
+    /**
+     * Selects ONE paired device (or none when `enabled = false`) for Auto-Connect.
+     *
+     *  • When `enabled = true`: marks [deviceAddress] as the single Auto-Connect target and
+     *    immediately notifies the running foreground service to connect if currently idle.
+     *  • When `enabled = false`: clears Auto-Connect so cold start / background service will
+     *    NOT auto-connect to any device.
+     */
     fun setAutoConnectDevice(deviceAddress: String, enabled: Boolean) {
         val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (enabled) {
             prefs.edit()
                 .putBoolean(KEY_AUTO_CONNECT_ENABLED, true)
                 .putString(KEY_AUTO_CONNECT_DEVICE_ADDRESS, deviceAddress)
-                .putString(KEY_PREFERRED_DEVICE_ADDRESS, deviceAddress)
                 .apply()
             _autoConnectDeviceAddress.value = deviceAddress
             Log.i(TAG, "setAutoConnectDevice: enabled for $deviceAddress")
+
+            val btManager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+            val device = try { btManager.adapter?.getRemoteDevice(deviceAddress) } catch (_: Exception) { null }
+            boundService?.updateAutoConnectTarget(device)
         } else {
             val current = prefs.getString(KEY_AUTO_CONNECT_DEVICE_ADDRESS, null)
-            if (current == deviceAddress) {
+            if (current.equals(deviceAddress, ignoreCase = true)) {
                 prefs.edit()
                     .putBoolean(KEY_AUTO_CONNECT_ENABLED, false)
                     .remove(KEY_AUTO_CONNECT_DEVICE_ADDRESS)
+                    .remove(KEY_PREFERRED_DEVICE_ADDRESS)
                     .apply()
                 _autoConnectDeviceAddress.value = null
+                boundService?.updateAutoConnectTarget(null)
                 Log.i(TAG, "setAutoConnectDevice: disabled for $deviceAddress")
             }
         }
+    }
+
+    /** Clears any selected Auto-Connect device ("None — Manual connect only"). */
+    fun clearAutoConnectDevice() {
+        val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putBoolean(KEY_AUTO_CONNECT_ENABLED, false)
+            .remove(KEY_AUTO_CONNECT_DEVICE_ADDRESS)
+            .remove(KEY_PREFERRED_DEVICE_ADDRESS)
+            .apply()
+        _autoConnectDeviceAddress.value = null
+        boundService?.updateAutoConnectTarget(null)
+        Log.i(TAG, "clearAutoConnectDevice: auto-connect disabled for all devices")
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -169,25 +201,35 @@ class BluetoothHidRepository(private val appContext: Context) {
     }
 
     /**
-     * Starts the HID service by default on app launch so the HID profile is enabled
-     * and ready. If an auto-connect device is enabled, initiates connection to it.
+     * Starts the HID service by default on app launch so the HID profile is registered
+     * and ready.
+     *
+     * Auto-Connect behavior on launch:
+     *  • If ONE paired device is selected for Auto-Connect, initiates connection to it.
+     *  • If NO paired device is selected for Auto-Connect, does NOT connect to any device
+     *    (waits in standby for the user to tap Connect).
      */
     fun autoConnectIfPossible() {
-        Log.i(TAG, "autoConnectIfPossible: enabling HID service by default on app launch")
+        Log.i(TAG, "autoConnectIfPossible: starting HID service on app launch")
         startService()
 
         val autoDevice = getAutoConnectDeviceAddressInternal()
         if (isAutoConnectEnabled() && !autoDevice.isNullOrBlank()) {
-            Log.i(TAG, "autoConnectIfPossible: Auto-Connect enabled for $autoDevice — initiating connection")
             val btManager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
             val device = try {
                 btManager.adapter?.getRemoteDevice(autoDevice)
             } catch (e: Exception) {
                 null
             }
-            if (device != null) {
+            if (device != null && device.bondState == BluetoothDevice.BOND_BONDED) {
+                Log.i(TAG, "autoConnectIfPossible: Auto-Connect enabled for $autoDevice — initiating connection")
                 connectToDevice(device)
+            } else {
+                Log.i(TAG, "autoConnectIfPossible: saved Auto-Connect device $autoDevice is no longer bonded — clearing")
+                clearAutoConnectDevice()
             }
+        } else {
+            Log.i(TAG, "autoConnectIfPossible: no Auto-Connect device selected — staying disconnected")
         }
     }
 
@@ -227,7 +269,18 @@ class BluetoothHidRepository(private val appContext: Context) {
 
     /** Updates the Air Mouse dynamic sensitivity multiplier. */
     fun setAirMouseSensitivity(sensitivity: Float) {
+        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_AIR_MOUSE_SENSITIVITY, sensitivity)
+            .apply()
         boundService?.setAirMouseSensitivity(sensitivity)
+    }
+
+    /** Current Air Mouse sensitivity (reads from preferences if service isn't bound yet). */
+    fun getAirMouseSensitivity(): Float {
+        boundService?.let { return it.airMouseSensitivity() }
+        return appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_AIR_MOUSE_SENSITIVITY, com.blekeymouse.sensor.AirMouseProvider.DEFAULT_SENSITIVITY)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -303,15 +356,10 @@ class BluetoothHidRepository(private val appContext: Context) {
     }
 
     /**
-     * Instructs the service to connect to [device] as the preferred HID host.
-     * Sets this device as the auto-reconnect target.
+     * Instructs the service to connect to [device] for the current session.
+     * Note: Manual connection does NOT overwrite the user's Auto-Connect preference.
      */
     fun connectToDevice(device: BluetoothDevice) {
-        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_PREFERRED_DEVICE_ADDRESS, device.address)
-            .apply()
-
         val service = boundService
         if (service == null) {
             Log.i(TAG, "connectToDevice: service not bound yet — queuing ${device.address} and starting service")
@@ -323,15 +371,49 @@ class BluetoothHidRepository(private val appContext: Context) {
     }
 
     /**
-     * Disconnects from the current device and clears the preferred device.
-     * Auto-reconnect will not trigger after this call.
+     * Disconnects from the current device.
      */
     fun disconnect() {
-        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .remove(KEY_PREFERRED_DEVICE_ADDRESS)
-            .apply()
         boundService?.disconnect()
+    }
+
+    /**
+     * Unpairs (removes bond) from [device].
+     *
+     *  1. If currently connected or auto-connecting to [device], disconnects first and clears
+     *     Auto-Connect if this device was the Auto-Connect target.
+     *  2. Invokes `BluetoothDevice.removeBond()` via reflection (supported across Android 9–15
+     *     for apps holding BLUETOOTH_CONNECT / BLUETOOTH_ADMIN).
+     *  3. Returns `true` if the system accepted the unbond request, `false` if the OEM
+     *     restricts programmatic unbonding (in which case the caller can open system Bluetooth
+     *     settings as a fallback).
+     */
+    fun unpairDevice(device: BluetoothDevice): Boolean {
+        val address = device.address
+        Log.i(TAG, "unpairDevice: requesting unbond for $address")
+
+        if (_autoConnectDeviceAddress.value.equals(address, ignoreCase = true)) {
+            clearAutoConnectDevice()
+        }
+        if (boundService?.connectedHost()?.address.equals(address, ignoreCase = true)) {
+            boundService?.disconnect()
+        }
+
+        val removed = try {
+            val method = BluetoothDevice::class.java.getMethod("removeBond")
+            (method.invoke(device) as? Boolean) ?: false
+        } catch (e: Exception) {
+            Log.w(TAG, "unpairDevice: removeBond() reflection failed for $address", e)
+            false
+        }
+
+        repoScope.launch {
+            delay(350)
+            refreshPairedDevices()
+            delay(700)
+            refreshPairedDevices()
+        }
+        return removed
     }
 
     /** Returns the currently connected [BluetoothDevice], or null. */
@@ -348,11 +430,12 @@ class BluetoothHidRepository(private val appContext: Context) {
      * @param dy      Vertical delta (positive = down)
      * @param buttons Optional button bitmask (null = retain active button state)
      * @param wheel   Scroll delta (positive = scroll up)
+     * @param pan     Horizontal scroll delta (positive = scroll right)
      */
-    fun sendMouseReport(dx: Int, dy: Int, buttons: Int? = null, wheel: Int = 0) {
+    fun sendMouseReport(dx: Int, dy: Int, buttons: Int? = null, wheel: Int = 0, pan: Int = 0) {
         val service = boundService ?: return
         val host = service.connectedHost() ?: return
-        service.reportSender().sendMouseReport(host, dx, dy, buttons, wheel)
+        service.reportSender().sendMouseReport(host, dx, dy, buttons, wheel, pan)
     }
 
     /**
@@ -362,17 +445,44 @@ class BluetoothHidRepository(private val appContext: Context) {
     fun setMouseButtonState(buttonMask: Int, isDown: Boolean) {
         val service = boundService ?: return
         val host = service.connectedHost() ?: return
+        service.notifyButtonActivity()
         service.reportSender().setMouseButtonState(host, buttonMask, isDown)
     }
 
     /**
-     * Sends a mouse click (press down, 50ms hold, release).
+     * Sends a mouse click (press down, short hold, release).
      * @param buttonMask 0x01 for Left, 0x02 for Right
      */
     fun sendMouseClick(buttonMask: Int) {
         val service = boundService ?: return
         val host = service.connectedHost() ?: return
+        service.notifyButtonActivity()
         service.reportSender().sendMouseClick(host, buttonMask)
+    }
+
+    /**
+     * Press-drag-release swipe (left button). On Android hosts this is delivered as a touch
+     * swipe — use it for YouTube Shorts / Reels, launcher pages, etc.
+     */
+    fun sendSwipe(dx: Int, dy: Int, durationMs: Long = 160L) {
+        val service = boundService ?: return
+        val host = service.connectedHost() ?: return
+        service.notifyButtonActivity()
+        service.reportSender().sendSwipe(host, dx, dy, durationMs)
+    }
+
+    /** Press & release a Consumer Control usage (Home, Back, Recents, volume, media). */
+    fun sendConsumerKey(usage: Int) {
+        val service = boundService ?: return
+        val host = service.connectedHost() ?: return
+        service.reportSender().sendConsumerTap(host, usage)
+    }
+
+    /** Press & release a keyboard combo, guaranteed in order. */
+    fun sendKeyTap(modifier: Int = 0, keycodes: List<Int> = emptyList()) {
+        val service = boundService ?: return
+        val host = service.connectedHost() ?: return
+        service.reportSender().sendKeyTap(host, modifier, keycodes)
     }
 
     /**

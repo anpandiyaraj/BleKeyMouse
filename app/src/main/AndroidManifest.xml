@@ -45,6 +45,8 @@
 
     <!-- Wake lock to keep service alive during reconnect attempts -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Boot completed receiver to start the HID foreground service in background when Auto-Connect is enabled -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Post notifications for the foreground service (API 33+) -->
     <uses-permission
         android:name="android.permission.POST_NOTIFICATIONS"
@@ -58,9 +60,9 @@
     <application
         android:name=".MainApplication"
         android:allowBackup="true"
-        android:icon="@drawable/ic_bluetooth_hid"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:roundIcon="@drawable/ic_bluetooth_hid"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.BleKeyMouse">
 
@@ -72,6 +74,10 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Long-press Quick Settings Tile opens MainActivity -->
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
             </intent-filter>
         </activity>
 
@@ -87,6 +93,37 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice"
             android:stopWithTask="false" />
+
+        <!-- ================================================================
+             QUICK SETTINGS TILE SERVICE
+             Lets the user toggle the HID service & trigger Auto-Connect in
+             the background directly from the Android Quick Settings shade.
+             ================================================================ -->
+        <service
+            android:name=".service.HidQuickSettingsTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_bluetooth_hid"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- ================================================================
+             BOOT / UPDATE AUTO-START RECEIVER
+             Starts BluetoothHidService in the background on device boot or
+             app update ONLY if a paired device is selected for Auto-Connect.
+             ================================================================ -->
+        <receiver
+            android:name=".service.BootAutoStartReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

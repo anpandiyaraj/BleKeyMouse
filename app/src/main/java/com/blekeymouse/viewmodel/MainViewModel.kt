@@ -8,6 +8,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.blekeymouse.data.BluetoothHidRepository
 import com.blekeymouse.data.ConnectionState
+import com.blekeymouse.data.HidDescriptors
+import com.blekeymouse.sensor.AirMouseProvider
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -112,6 +115,18 @@ class MainViewModel(
         repository.setAutoConnectDevice(deviceAddress, enabled)
     }
 
+    fun clearAutoConnectDevice() {
+        repository.clearAutoConnectDevice()
+    }
+
+    /**
+     * Unpairs (removes bond) from [device].
+     * @return true if the system accepted the unbond request.
+     */
+    fun unpairDevice(device: BluetoothDevice): Boolean {
+        return repository.unpairDevice(device)
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Air Mouse State & Controls
     // ─────────────────────────────────────────────────────────────────────────
@@ -124,12 +139,17 @@ class MainViewModel(
             initialValue = false
         )
 
+    private val _airMouseSensitivity = MutableStateFlow(repository.getAirMouseSensitivity())
+    val airMouseSensitivity: StateFlow<Float> = _airMouseSensitivity.asStateFlow()
+
     fun toggleAirMouse() {
         repository.toggleAirMouse()
     }
 
     fun setAirMouseSensitivity(sensitivity: Float) {
-        repository.setAirMouseSensitivity(sensitivity)
+        val clamped = sensitivity.coerceIn(AirMouseProvider.MIN_SENSITIVITY, AirMouseProvider.MAX_SENSITIVITY)
+        _airMouseSensitivity.value = clamped
+        repository.setAirMouseSensitivity(clamped)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -183,26 +203,84 @@ class MainViewModel(
         repository.sendMouseReport(dx = 0, dy = 0, wheel = delta)
     }
 
-    /** Sends a horizontal scroll wheel event via Shift+Wheel modifier. Positive [delta] = scroll right. */
+    /**
+     * Sends a native horizontal scroll event via HID AC Pan (Consumer 0x0238).
+     * Positive [delta] = scroll right. Works on Android, Windows, macOS, and Linux.
+     */
     fun sendHorizontalScroll(delta: Int) {
-        repository.sendKeyboardReport(modifier = 0x02, keycodes = emptyList())
-        repository.sendMouseReport(dx = 0, dy = 0, wheel = delta)
-        repository.sendKeyRelease()
+        repository.sendMouseReport(dx = 0, dy = 0, pan = delta)
     }
 
-    /** Sends Escape key (USB HID keycode 0x29). Acts as ESC on PC and Back button on Android. */
+    /**
+     * Performs a left-button press-drag-release swipe gesture and returns the cursor.
+     * On Android hosts, mouse drag acts as a touch swipe — required for paging launchers,
+     * YouTube Shorts / Reels / TikTok (vertical ViewPagers), and notification shade.
+     */
+    fun sendSwipeUp() {
+        // Finger drags UP (negative dy) → advances to next Short / scrolls content down
+        repository.sendSwipe(dx = 0, dy = -380)
+    }
+
+    fun sendSwipeDown() {
+        // Finger drags DOWN (positive dy) → previous Short / pulls down
+        repository.sendSwipe(dx = 0, dy = 380)
+    }
+
+    fun sendSwipeLeft() {
+        // Finger drags LEFT (negative dx) → next launcher page
+        repository.sendSwipe(dx = -380, dy = 0)
+    }
+
+    fun sendSwipeRight() {
+        // Finger drags RIGHT (positive dx) → previous launcher page
+        repository.sendSwipe(dx = 380, dy = 0)
+    }
+
+    /**
+     * Sends Android / browser Back (Consumer AC Back + Escape fallback).
+     * AC Back is mapped natively by Android to KEYCODE_BACK everywhere without side effects.
+     */
+    fun sendBackKey() {
+        repository.sendConsumerKey(HidDescriptors.Consumer.AC_BACK)
+    }
+
+    /** Sends Escape key (USB HID keycode 0x29). */
     fun sendEscapeKey() {
         sendKeyCombo(modifier = 0, keycodes = listOf(0x29))
     }
 
+    /** Sends Android Home / PC browser Home (Consumer AC Home 0x0223). */
+    fun sendHomeKey() {
+        repository.sendConsumerKey(HidDescriptors.Consumer.AC_HOME)
+    }
+
+    /** Sends Android Recents / App Switcher (Consumer AL Task Switcher 0x01A2). */
+    fun sendRecentsKey() {
+        repository.sendConsumerKey(HidDescriptors.Consumer.TASK_SWITCHER)
+    }
+
+    /** Sends Play/Pause media key (Consumer 0x00CD). */
+    fun sendPlayPause() {
+        repository.sendConsumerKey(HidDescriptors.Consumer.PLAY_PAUSE)
+    }
+
+    /** Sends Volume Up (Consumer 0x00E9). */
+    fun sendVolumeUp() {
+        repository.sendConsumerKey(HidDescriptors.Consumer.VOLUME_UP)
+    }
+
+    /** Sends Volume Down (Consumer 0x00EA). */
+    fun sendVolumeDown() {
+        repository.sendConsumerKey(HidDescriptors.Consumer.VOLUME_DOWN)
+    }
+
     /**
-     * Sends a keyboard key combo.
+     * Sends a keyboard key combo (press + hold 40ms + release, strictly ordered).
      * @param modifier Modifier bitmask
      * @param keycodes USB HID keycodes (up to 6)
      */
     fun sendKeyCombo(modifier: Int = 0, keycodes: List<Int> = emptyList()) {
-        repository.sendKeyboardReport(modifier, keycodes)
-        repository.sendKeyRelease()
+        repository.sendKeyTap(modifier, keycodes)
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -52,10 +52,14 @@ class BluetoothHidService : Service() {
         const val NOTIFICATION_CHANNEL_ID = "ble_hid_service_channel"
         const val NOTIFICATION_ID = 1001
 
+        const val ACTION_STOP_SERVICE = "com.blekeymouse.action.STOP_SERVICE"
+        const val ACTION_DISCONNECT_DEVICE = "com.blekeymouse.action.DISCONNECT_DEVICE"
+
         private const val PREFS_NAME = "ble_key_mouse_prefs"
         private const val KEY_PREFERRED_DEVICE_ADDRESS = "preferred_device_address"
         private const val KEY_AUTO_CONNECT_ENABLED = "auto_connect_enabled"
         private const val KEY_AUTO_CONNECT_DEVICE_ADDRESS = "auto_connect_device_address"
+        private const val KEY_AIR_MOUSE_SENSITIVITY = "air_mouse_sensitivity"
 
         // Reconnect backoff parameters
         private const val RECONNECT_INITIAL_DELAY_MS = 2_000L
@@ -85,6 +89,9 @@ class BluetoothHidService : Service() {
     @Volatile
     private var preferredDevice: BluetoothDevice? = null
 
+    /** Optional callback invoked when the service stops itself (e.g., notification Stop action). */
+    var onServiceDestroyed: (() -> Unit)? = null
+
     // Coroutine scope surviving the full service lifecycle
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -92,39 +99,27 @@ class BluetoothHidService : Service() {
     private var reconnectJob: Job? = null
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Preference Storage
+    // Preference Storage — Single Source of Truth for Auto-Connect
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun savePreferredDeviceAddress(address: String) {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putString(KEY_PREFERRED_DEVICE_ADDRESS, address)
-            .apply()
-    }
-
-    private fun clearPreferredDeviceAddress() {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .remove(KEY_PREFERRED_DEVICE_ADDRESS)
-            .apply()
-    }
-
-    private fun restorePreferredDevice(): BluetoothDevice? {
+    /**
+     * Restores the user-selected Auto-Connect device ONLY if Auto-Connect is explicitly enabled.
+     * If no paired device is selected for Auto-Connect, returns null so the service stays idle
+     * on cold start and waits for manual user connection.
+     */
+    private fun restoreAutoConnectDevice(): BluetoothDevice? {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val autoConnectEnabled = prefs.getBoolean(KEY_AUTO_CONNECT_ENABLED, false)
-        val savedAddress = if (autoConnectEnabled) {
-            prefs.getString(KEY_AUTO_CONNECT_DEVICE_ADDRESS, null)
-                ?: prefs.getString(KEY_PREFERRED_DEVICE_ADDRESS, null)
-        } else {
-            prefs.getString(KEY_PREFERRED_DEVICE_ADDRESS, null)
-        } ?: return null
+        if (!autoConnectEnabled) return null
+        val savedAddress = prefs.getString(KEY_AUTO_CONNECT_DEVICE_ADDRESS, null) ?: return null
 
         return try {
             if (BluetoothAdapter.checkBluetoothAddress(savedAddress)) {
-                bluetoothAdapter.getRemoteDevice(savedAddress)
+                val device = bluetoothAdapter.getRemoteDevice(savedAddress)
+                if (device.bondState == BluetoothDevice.BOND_BONDED) device else null
             } else null
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to restore preferred device address: $savedAddress", e)
+            Log.w(TAG, "Failed to restore auto-connect device address: $savedAddress", e)
             null
         }
     }
@@ -146,11 +141,11 @@ class BluetoothHidService : Service() {
                 return
             }
 
-        // Restore preferred device from storage if available
-        preferredDevice = restorePreferredDevice()
+        // Restore auto-connect device from storage ONLY if Auto-Connect is enabled
+        preferredDevice = restoreAutoConnectDevice()
         preferredDevice?.let { device ->
-            Log.i(TAG, "Restored preferred device from storage: ${device.address}")
-        }
+            Log.i(TAG, "Restored Auto-Connect target from storage: ${device.address}")
+        } ?: Log.i(TAG, "No Auto-Connect device selected — service will wait in idle/standby")
 
         // ── Air Mouse Provider ────────────────────────────────────────────
         airMouseProvider = AirMouseProvider(
@@ -164,19 +159,24 @@ class BluetoothHidService : Service() {
         )
 
         // ── HID Profile Manager ────────────────────────────────────────────
+        airMouseProvider.sensitivity = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getFloat(KEY_AIR_MOUSE_SENSITIVITY, AirMouseProvider.DEFAULT_SENSITIVITY)
         hidProfileManager = HidProfileManager(
             bluetoothAdapter = bluetoothAdapter,
+            shouldAutoConnectToPluggedHost = { plugged ->
+                val target = preferredDevice
+                target != null && target.address.equals(plugged.address, ignoreCase = true)
+            },
             onDeviceConnected = { device ->
                 Log.i(TAG, "Device connected: ${device.address}")
                 preferredDevice = device
-                savePreferredDeviceAddress(device.address)
                 cancelReconnectLoop() // stop reconnect attempts on success
             },
             onDeviceDisconnected = { device ->
                 Log.i(TAG, "Device disconnected: ${device.address}")
                 airMouseProvider.stopTracking() // Automatically unregister sensor listener on connection drop
                 if (preferredDevice?.address?.equals(device.address, ignoreCase = true) == true) {
-                    startReconnectLoop(device) // auto-reconnect
+                    startReconnectLoop(device) // auto-reconnect while preferred in this session or via auto-connect
                 }
             }
         )
@@ -222,10 +222,26 @@ class BluetoothHidService : Service() {
         // ── Foreground Notification ────────────────────────────────────────
         createNotificationChannel()
         promoteToForeground()
+
+        // Keep foreground notification subtitle synchronized with live connection state
+        serviceScope.launch {
+            hidProfileManager.connectionState.collect { state ->
+                val manager = getSystemService(NotificationManager::class.java)
+                manager.notify(NOTIFICATION_ID, buildNotification(state))
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.i(TAG, "onStartCommand: startId=$startId")
+        Log.i(TAG, "onStartCommand: startId=$startId, action=${intent?.action}")
+        when (intent?.action) {
+            ACTION_DISCONNECT_DEVICE -> disconnect()
+            ACTION_STOP_SERVICE -> {
+                disconnect()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        }
         return START_STICKY
     }
 
@@ -233,6 +249,7 @@ class BluetoothHidService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "onDestroy")
+        onServiceDestroyed?.invoke()
         airMouseProvider.stopTracking()
         cancelReconnectLoop()
         try {
@@ -258,11 +275,10 @@ class BluetoothHidService : Service() {
         hidProfileManager.isAppRegistered
 
     /**
-     * Sets the preferred device and initiates a connection.
+     * Sets the active session target device and initiates a connection.
      */
     fun connectTo(device: BluetoothDevice) {
         preferredDevice = device
-        savePreferredDeviceAddress(device.address)
         cancelReconnectLoop()
         serviceScope.launch {
             val success = hidProfileManager.connectToDevice(device)
@@ -272,11 +288,29 @@ class BluetoothHidService : Service() {
         }
     }
 
-    /** Disconnects from the current device and clears the preferred device. */
+    /**
+     * Synchronizes the background service's auto-connect target when the user toggles
+     * Auto-Connect in the UI.
+     */
+    fun updateAutoConnectTarget(device: BluetoothDevice?) {
+        if (device != null) {
+            preferredDevice = device
+            val current = hidProfileManager.connectionState.value
+            if (current !is ConnectionState.Connected && current !is ConnectionState.Connecting) {
+                startReconnectLoop(device)
+            }
+        } else {
+            if (hidProfileManager.connectedHost == null) {
+                preferredDevice = null
+                cancelReconnectLoop()
+            }
+        }
+    }
+
+    /** Disconnects from the current device and stops auto-reconnect for this session. */
     fun disconnect() {
         val host = hidProfileManager.connectedHost ?: preferredDevice
         preferredDevice = null
-        clearPreferredDeviceAddress()
         cancelReconnectLoop()
         if (host != null) {
             hidProfileManager.disconnectFromDevice(host)
@@ -309,6 +343,19 @@ class BluetoothHidService : Service() {
 
     fun setAirMouseSensitivity(sensitivity: Float) {
         airMouseProvider.sensitivity = sensitivity
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putFloat(KEY_AIR_MOUSE_SENSITIVITY, airMouseProvider.sensitivity)
+            .apply()
+    }
+
+    fun airMouseSensitivity(): Float = airMouseProvider.sensitivity
+
+    /**
+     * Called right before a mouse button press/release is sent. While Air Mouse is active,
+     * briefly freezes the cursor so the physical tap on the phone doesn't move it off target.
+     */
+    fun notifyButtonActivity() {
+        if (airMouseProvider.isTracking.value) airMouseProvider.suppressMotion()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -389,7 +436,7 @@ class BluetoothHidService : Service() {
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun promoteToForeground() {
-        val notification = buildNotification()
+        val notification = buildNotification(hidProfileManager.connectionState.value)
         ServiceCompat.startForeground(
             /* service          = */ this,
             /* id               = */ NOTIFICATION_ID,
@@ -398,22 +445,56 @@ class BluetoothHidService : Service() {
         )
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(state: ConnectionState = ConnectionState.Disconnected): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("BleKeyMouse Active")
-            .setContentText("Bluetooth HID service is running")
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, BluetoothHidService::class.java).apply { action = ACTION_STOP_SERVICE },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val disconnectPendingIntent = PendingIntent.getService(
+            this,
+            2,
+            Intent(this, BluetoothHidService::class.java).apply { action = ACTION_DISCONNECT_DEVICE },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val subtitle = when (state) {
+            is ConnectionState.Connected -> "Connected to ${state.deviceName} • Mouse & Keyboard ready"
+            is ConnectionState.Connecting -> "Connecting to ${state.deviceName}…"
+            is ConnectionState.Registering -> "Registering Bluetooth HID profile…"
+            is ConnectionState.Error -> state.reason
+            is ConnectionState.Disconnected -> {
+                val target = preferredDevice
+                if (target != null) {
+                    val name = try { target.name ?: target.address } catch (_: SecurityException) { target.address }
+                    "Standby • Auto-Connect ready for $name"
+                } else {
+                    "Standby • Select a device to connect"
+                }
+            }
+        }
+
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("BleKeyMouse HID Controller")
+            .setContentText(subtitle)
             .setSmallIcon(R.drawable.ic_bluetooth_hid)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setSilent(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .build()
+
+        if (state is ConnectionState.Connected || state is ConnectionState.Connecting) {
+            builder.addAction(0, "Disconnect", disconnectPendingIntent)
+        }
+        builder.addAction(0, "Stop Service", stopPendingIntent)
+        return builder.build()
     }
 
     private fun createNotificationChannel() {

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Wireless / Air Mouse arc -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M34,32 A26,26 0 0,1 74,32"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:strokeColor="#FFFFFFFF" />
+
+    <!-- Mouse outline -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,29 C64.5,29 72,36.5 72,47 L72,62 C72,72.5 64.5,80 54,80 C43.5,80 36,72.5 36,62 L36,47 C36,36.5 43.5,29 54,29 Z"
+        android:strokeWidth="3.0"
+        android:strokeColor="#FFFFFFFF" />
+
+    <!-- Button seam & scroll wheel -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M37.5,49 L70.5,49"
+        android:strokeWidth="2.0"
+        android:strokeColor="#FFFFFFFF" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,37 C55.6,37 56.8,38.2 56.8,39.8 L56.8,44.2 C56.8,45.8 55.6,47 54,47 C52.4,47 51.2,45.8 51.2,44.2 L51.2,39.8 C51.2,38.2 52.4,37 54,37 Z" />
+
+    <!-- Bluetooth Rune -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M49.5,58.5 L58.5,66.5 L54,71 L54,54 L58.5,58.5 L49.5,66.5"
+        android:strokeWidth="2.3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeColor="#FFFFFFFF" />
+
+    <!-- Air-Mouse Cursor Arrow -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M67,24 L79,28.5 L73.5,31.5 L71,37 Z" />
+</vector>
+

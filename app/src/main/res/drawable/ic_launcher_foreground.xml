@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer wireless / Air Mouse motion arcs -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M34,32 A26,26 0 0,1 74,32"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:strokeColor="#9900E5FF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M29,27.5 A32,32 0 0,1 79,27.5"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:strokeColor="#4D00E5FF" />
+
+    <!-- Mouse body ambient drop shadow -->
+    <path
+        android:fillColor="#44000000"
+        android:pathData="M54,31 C64.5,31 72,38.5 72,49 L72,64 C72,74.5 64.5,82 54,82 C43.5,82 36,74.5 36,64 L36,49 C36,38.5 43.5,31 54,31 Z" />
+
+    <!-- Main Mouse Body (dark slate fill with glowing cyan-blue gradient border) -->
+    <path
+        android:pathData="M54,29 C64.5,29 72,36.5 72,47 L72,62 C72,72.5 64.5,80 54,80 C43.5,80 36,72.5 36,62 L36,47 C36,36.5 43.5,29 54,29 Z"
+        android:strokeWidth="2.6">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="36"
+                android:startY="29"
+                android:endX="72"
+                android:endY="80"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF1E293B" />
+                <item android:offset="1.0" android:color="#FF0F172A" />
+            </gradient>
+        </aapt:attr>
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="36"
+                android:startY="29"
+                android:endX="72"
+                android:endY="80"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF00E5FF" />
+                <item android:offset="1.0" android:color="#FF0066FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Left/Right mouse button split & horizontal seam -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M37.5,49 L70.5,49"
+        android:strokeWidth="1.5"
+        android:strokeColor="#5500E5FF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,30 L54,37"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:strokeColor="#8800E5FF" />
+
+    <!-- Glowing Cyan Scroll Wheel Pill -->
+    <path
+        android:pathData="M54,37 C55.6,37 56.8,38.2 56.8,39.8 L56.8,44.2 C56.8,45.8 55.6,47 54,47 C52.4,47 51.2,45.8 51.2,44.2 L51.2,39.8 C51.2,38.2 52.4,37 54,37 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="54"
+                android:startY="37"
+                android:endX="54"
+                android:endY="47"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF80F4FF" />
+                <item android:offset="1.0" android:color="#FF00E5FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Bluetooth Rune Emblem inside lower mouse palm area -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M49.5,58.5 L58.5,66.5 L54,71 L54,54 L58.5,58.5 L49.5,66.5"
+        android:strokeWidth="2.1"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeColor="#FF00E5FF" />
+
+    <!-- Dynamic Air-Mouse Cursor Arrow Badge (top-right accent) -->
+    <path
+        android:pathData="M67,24 L79,28.5 L73.5,31.5 L71,37 Z"
+        android:strokeWidth="1.1"
+        android:strokeLineJoin="round"
+        android:strokeColor="#FF0A0E1A">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="67"
+                android:startY="24"
+                android:endX="79"
+                android:endY="37"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFFFFFFF" />
+                <item android:offset="1.0" android:color="#FF00E5FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>
+

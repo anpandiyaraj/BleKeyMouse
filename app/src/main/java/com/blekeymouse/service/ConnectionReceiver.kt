@@ -2,6 +2,7 @@ package com.blekeymouse.service
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothClass
 import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -48,10 +49,34 @@ class ConnectionReceiver(
         private const val TAG = "ConnectionReceiver"
 
         /** Delay after ACL_CONNECTED before calling HID connect(). See Edge Case #1. */
-        private const val ACL_CONNECT_DELAY_MS = 500L
+        private const val ACL_CONNECT_DELAY_MS = 2_500L
 
         /** Max time to wait for app registration before giving up on this connect attempt. */
         private const val REGISTRATION_AWAIT_TIMEOUT_MS = 10_000L
+
+        /**
+         * Only auto-connect HID to devices that can actually act as a HID host
+         * (PCs, phones/tablets, TVs/set-top boxes). Prevents hijacking the single HID
+         * slot with headphones, watches, car kits, etc.
+         */
+        @SuppressLint("MissingPermission")
+        private fun isLikelyHidHost(device: BluetoothDevice): Boolean {
+            val btClass = try { device.bluetoothClass } catch (_: SecurityException) { null } ?: return true
+            return when (btClass.majorDeviceClass) {
+                BluetoothClass.Device.Major.COMPUTER,
+                BluetoothClass.Device.Major.PHONE,
+                BluetoothClass.Device.Major.MISC,
+                BluetoothClass.Device.Major.UNCATEGORIZED -> true
+                BluetoothClass.Device.Major.AUDIO_VIDEO -> when (btClass.deviceClass) {
+                    BluetoothClass.Device.AUDIO_VIDEO_VIDEO_DISPLAY_AND_LOUDSPEAKER,
+                    BluetoothClass.Device.AUDIO_VIDEO_VIDEO_MONITOR,
+                    BluetoothClass.Device.AUDIO_VIDEO_SET_TOP_BOX,
+                    BluetoothClass.Device.AUDIO_VIDEO_VIDEO_GAMING_TOY -> true
+                    else -> false
+                }
+                else -> false
+            }
+        }
     }
 
     // Coroutine scope for the delayed connect dispatched on IO thread.
@@ -72,13 +97,20 @@ class ConnectionReceiver(
 
                 Log.i(TAG, "ACTION_ACL_CONNECTED: device=${device.address}, preferred=${preferred?.address}")
 
-                val shouldConnect = (preferred != null && device.address.equals(preferred.address, ignoreCase = true)) ||
-                        (preferred == null && device.bondState == BluetoothDevice.BOND_BONDED)
+                // Strict Auto-Connect policy: ONLY initiate an outgoing HID connection when a
+                // device is explicitly set as the preferred / auto-connect target. If no device
+                // is selected for auto-connect, do not connect automatically.
+                val shouldConnect = preferred != null &&
+                        device.address.equals(preferred.address, ignoreCase = true) &&
+                        isLikelyHidHost(device)
 
                 if (shouldConnect) {
                     scope.launch {
-                        Log.i(TAG, "Preferred device ACL connected — waiting 1000ms for L2CAP handshake settle")
-                        delay(1000)
+                        // FIX: Give a host-initiated connection time to open the HID control /
+                        // interrupt channels itself. Calling connect() too early collides with
+                        // the incoming L2CAP setup and both attempts fail.
+                        Log.i(TAG, "Host ACL connected — waiting ${ACL_CONNECT_DELAY_MS}ms for host-initiated HID channel")
+                        delay(ACL_CONNECT_DELAY_MS)
 
                         val registered = withTimeoutOrNull(REGISTRATION_AWAIT_TIMEOUT_MS) {
                             hidProfileManager.isAppRegistered.first { it }
