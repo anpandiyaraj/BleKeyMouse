@@ -258,7 +258,7 @@ class HidProfileManager(
             hid.registerApp(
                 /* sdpSettings = */ HidDescriptors.buildSdpSettings(),
                 /* inQos       = */ null,
-                /* outQos      = */ HidDescriptors.buildQosSettings(),
+                /* outQos      = */ null,
                 /* executor    = */ callbackExecutor,
                 /* callback    = */ hidCallback
             )

@@ -72,7 +72,8 @@ class ConnectionReceiver(
 
                 Log.i(TAG, "ACTION_ACL_CONNECTED: device=${device.address}, preferred=${preferred?.address}")
 
-                val shouldConnect = preferred != null && device.address.equals(preferred.address, ignoreCase = true)
+                val shouldConnect = (preferred != null && device.address.equals(preferred.address, ignoreCase = true)) ||
+                        (preferred == null && device.bondState == BluetoothDevice.BOND_BONDED)
 
                 if (shouldConnect) {
                     scope.launch {
