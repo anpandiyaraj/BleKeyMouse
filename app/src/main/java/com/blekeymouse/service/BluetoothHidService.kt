@@ -12,7 +12,6 @@ import android.bluetooth.BluetoothManager
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Binder
-import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -340,8 +339,22 @@ class BluetoothHidService : Service() {
                     break
                 }
 
-                val delayMs = if (attempt == 0) 0L else minOf(
-                    RECONNECT_INITIAL_DELAY_MS + ((attempt - 1) * 2_000L),
+                val currentState = hidProfileManager.connectionState.value
+                val hidState = try { hidProfileManager.hidDevice?.getConnectionState(device) } catch (_: Exception) { null }
+
+                if (currentState is ConnectionState.Connected || hidState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
+                    Log.i(TAG, "Device already connected — stopping reconnect loop")
+                    break
+                }
+
+                if (currentState is ConnectionState.Connecting || hidState == android.bluetooth.BluetoothProfile.STATE_CONNECTING) {
+                    Log.i(TAG, "Connection currently in progress ($hidState) — waiting for state change")
+                    delay(3_000)
+                    continue
+                }
+
+                val delayMs = if (attempt == 0) 1_000L else minOf(
+                    RECONNECT_INITIAL_DELAY_MS + ((attempt - 1) * 3_000L),
                     RECONNECT_MAX_DELAY_MS
                 )
                 if (delayMs > 0) {
@@ -349,28 +362,14 @@ class BluetoothHidService : Service() {
                     delay(delayMs)
                 }
 
-                // Only attempt if local Bluetooth is on
-                if (!bluetoothAdapter.isEnabled) {
-                    Log.w(TAG, "Bluetooth is off — skipping reconnect attempt")
+                if (!bluetoothAdapter.isEnabled || !hidProfileManager.isAppRegistered.value) {
                     attempt++
                     continue
                 }
 
-                // Gate on app registration (Edge Case #2)
-                if (!hidProfileManager.isAppRegistered.value) {
-                    Log.w(TAG, "HID app not registered — skipping reconnect attempt")
-                    attempt++
-                    continue
-                }
-
-                val currentState = hidProfileManager.connectionState.value
-                if (currentState is ConnectionState.Connecting) {
-                    Log.i(TAG, "Connection currently in progress — waiting for state change")
-                } else {
-                    Log.i(TAG, "Executing reconnect attempt #${attempt + 1} calling connectToDevice(${device.address})")
-                    hidProfileManager.connectToDevice(device)
-                    attempt++
-                }
+                Log.i(TAG, "Executing reconnect attempt #${attempt + 1} calling connectToDevice(${device.address})")
+                hidProfileManager.connectToDevice(device)
+                attempt++
             }
         }
     }
@@ -390,12 +389,7 @@ class BluetoothHidService : Service() {
             /* service          = */ this,
             /* id               = */ NOTIFICATION_ID,
             /* notification     = */ notification,
-            /* foregroundServiceType = */
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-            } else {
-                0
-            }
+            /* foregroundServiceType = */ android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         )
     }
 

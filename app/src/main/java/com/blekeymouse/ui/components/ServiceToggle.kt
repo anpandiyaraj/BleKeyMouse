@@ -43,7 +43,7 @@ import com.blekeymouse.ui.theme.TextSecondary
 fun ServiceToggle(
     isRunning: Boolean,
     onToggle: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val containerColor by animateColorAsState(
         targetValue = if (isRunning) CyanGlow.copy(alpha = 0.10f) else SurfaceElevated,

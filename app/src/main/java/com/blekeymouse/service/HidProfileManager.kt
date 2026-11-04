@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothHidDevice
-import android.bluetooth.BluetoothHidDeviceAppQosSettings
 import android.bluetooth.BluetoothHidDeviceAppSdpSettings
 import android.bluetooth.BluetoothProfile
 import android.util.Log
@@ -91,7 +90,7 @@ class HidProfileManager(
                     connectedHost = pluggedDevice
                     reportSender.attach(hidDevice!!)
                     _connectionState.value = ConnectionState.Connected(
-                        deviceName = try { pluggedDevice.name ?: pluggedDevice.address } catch (e: SecurityException) { pluggedDevice.address },
+                        deviceName = try { pluggedDevice.name ?: pluggedDevice.address } catch (_: SecurityException) { pluggedDevice.address },
                         deviceAddress = pluggedDevice.address
                     )
                     onDeviceConnected(pluggedDevice)
@@ -309,6 +308,20 @@ class HidProfileManager(
             Log.w(TAG, "connectToDevice: app not registered yet — aborting connect to avoid silent failure")
             return false
         }
+
+        val state = try {
+            hid.getConnectionState(device)
+        } catch (_: SecurityException) {
+            BluetoothProfile.STATE_DISCONNECTED
+        } catch (_: Exception) {
+            BluetoothProfile.STATE_DISCONNECTED
+        }
+
+        if (state == BluetoothProfile.STATE_CONNECTED || state == BluetoothProfile.STATE_CONNECTING) {
+            Log.i(TAG, "connectToDevice: device ${device.address} is already in state $state — skipping duplicate connect call")
+            return true
+        }
+
         Log.i(TAG, "connectToDevice: calling hidDevice.connect(${device.address})")
         return try {
             hid.connect(device)

@@ -35,7 +35,7 @@ import kotlin.math.sqrt
  */
 class AirMouseProvider(
     context: Context,
-    private val onDisplacementCalculated: (dx: Int, dy: Int) -> Unit
+    private val onDisplacementCalculated: (dx: Int, dy: Int) -> Unit,
 ) : SensorEventListener {
 
     companion object {
@@ -57,7 +57,7 @@ class AirMouseProvider(
     // Dedicated background scope for sensor event calculations
     private val providerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val _isTracking = MutableStateFlow(false)
+    private val _isTracking = MutableStateFlow(value = false)
     val isTracking: StateFlow<Boolean> = _isTracking.asStateFlow()
 
     /** Dynamic sensitivity scaling factor for Air Mouse cursor speed. */
@@ -69,7 +69,7 @@ class AirMouseProvider(
     var deadzoneThreshold: Float = 0.01f
 
     // Orientation Rotation Matrix
-    private val rotationMatrix = FloatArray(9) { if (it % 4 == 0) 1f else 0f }
+    private val rotationMatrix = FloatArray(9) { if ((it % 4) == 0) 1f else 0f }
     private var hasRotationMatrix = false
 
     // Low-pass filter state

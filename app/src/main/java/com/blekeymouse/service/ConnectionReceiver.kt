@@ -65,22 +65,20 @@ class ConnectionReceiver(
             // ACL Connected — Edge Case Fix #1
             // ──────────────────────────────────────────────────────────────
             BluetoothDevice.ACTION_ACL_CONNECTED -> {
+                @Suppress("DEPRECATION")
                 val device: BluetoothDevice = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     ?: return
                 val preferred = getPreferredDevice()
 
                 Log.i(TAG, "ACTION_ACL_CONNECTED: device=${device.address}, preferred=${preferred?.address}")
 
-                // Connect if this matches preferred device, or if preferred is null but device is bonded
-                val shouldConnect = (preferred != null && device.address.equals(preferred.address, ignoreCase = true)) ||
-                        (preferred == null && device.bondState == BluetoothDevice.BOND_BONDED)
+                val shouldConnect = preferred != null && device.address.equals(preferred.address, ignoreCase = true)
 
                 if (shouldConnect) {
                     scope.launch {
-                        Log.i(TAG, "Preferred device ACL connected — waiting ${ACL_CONNECT_DELAY_MS}ms for baseband settle")
-                        delay(ACL_CONNECT_DELAY_MS) // baseband settle — Edge Case #1
+                        Log.i(TAG, "Preferred device ACL connected — waiting 1000ms for L2CAP handshake settle")
+                        delay(1000)
 
-                        // Gate: ensure HID app is registered before connecting — Edge Case #2
                         val registered = withTimeoutOrNull(REGISTRATION_AWAIT_TIMEOUT_MS) {
                             hidProfileManager.isAppRegistered.first { it }
                         }
@@ -90,8 +88,17 @@ class ConnectionReceiver(
                             return@launch
                         }
 
-                        Log.i(TAG, "HID app registered; calling connect() on ${device.address}")
-                        hidProfileManager.connectToDevice(device)
+                        val currentState = try {
+                            hidProfileManager.hidDevice?.getConnectionState(device)
+                        } catch (_: Exception) { null }
+
+                        if (currentState != android.bluetooth.BluetoothProfile.STATE_CONNECTED &&
+                            currentState != android.bluetooth.BluetoothProfile.STATE_CONNECTING) {
+                            Log.i(TAG, "ACL connected and HID L2CAP not active yet — calling connectToDevice(${device.address})")
+                            hidProfileManager.connectToDevice(device)
+                        } else {
+                            Log.i(TAG, "ACL connected and HID L2CAP already active/connecting ($currentState) — skipping duplicate connect()")
+                        }
                     }
                 }
             }
@@ -100,6 +107,7 @@ class ConnectionReceiver(
             // ACL Disconnected — trigger service reconnect loop
             // ──────────────────────────────────────────────────────────────
             BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                @Suppress("DEPRECATION")
                 val device: BluetoothDevice = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     ?: return
                 Log.i(TAG, "ACTION_ACL_DISCONNECTED: device=${device.address}")
@@ -110,6 +118,7 @@ class ConnectionReceiver(
             // Bond state changed — log pairing/unpairing event
             // ──────────────────────────────────────────────────────────────
             BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                @Suppress("DEPRECATION")
                 val device: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                 val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
                 Log.i(TAG, "ACTION_BOND_STATE_CHANGED: device=${device?.address}, bondState=$bondState")

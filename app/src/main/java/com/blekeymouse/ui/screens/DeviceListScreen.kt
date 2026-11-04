@@ -183,7 +183,7 @@ fun DeviceListScreen(viewModel: MainViewModel) {
                                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                                 }
                                 context.startActivity(intent)
-                            } catch (e: Exception) {
+                            } catch (_: Exception) {
                                 try {
                                     val discoverableIntent = Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
                                         putExtra(android.bluetooth.BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120)
@@ -342,13 +342,13 @@ private fun EmptyDevicesPlaceholder() {
             Icon(
                 imageVector = Icons.Rounded.Bluetooth,
                 contentDescription = null,
-                tint = com.blekeymouse.ui.theme.DeepNavy,
+                tint = DeepNavy,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = "Open Bluetooth Settings",
-                color = com.blekeymouse.ui.theme.DeepNavy,
+                color = DeepNavy,
                 fontWeight = FontWeight.Bold
             )
         }
