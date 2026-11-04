@@ -116,9 +116,15 @@ class HidProfileManager(
                     )
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
+                    val wasConnecting = _connectionState.value is ConnectionState.Connecting
                     connectedHost = null
                     reportSender.detach()
-                    _connectionState.value = ConnectionState.Disconnected
+                    if (wasConnecting) {
+                        Log.w(TAG, "Connection attempt to ${device.address} failed/rejected by remote device")
+                        _connectionState.value = ConnectionState.Error("Target host rejected HID connection")
+                    } else {
+                        _connectionState.value = ConnectionState.Disconnected
+                    }
                     onDeviceDisconnected(device)
                 }
                 BluetoothProfile.STATE_DISCONNECTING -> {

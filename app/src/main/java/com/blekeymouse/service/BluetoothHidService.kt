@@ -353,6 +353,11 @@ class BluetoothHidService : Service() {
                     continue
                 }
 
+                if (currentState is ConnectionState.Error) {
+                    Log.w(TAG, "Connection in error state (${currentState.reason}) — pausing reconnect loop for 5s")
+                    delay(5_000)
+                }
+
                 val delayMs = if (attempt == 0) 1_000L else minOf(
                     RECONNECT_INITIAL_DELAY_MS + ((attempt - 1) * 3_000L),
                     RECONNECT_MAX_DELAY_MS
