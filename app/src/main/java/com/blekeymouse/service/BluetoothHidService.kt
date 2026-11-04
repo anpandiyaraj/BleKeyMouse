@@ -55,6 +55,8 @@ class BluetoothHidService : Service() {
 
         private const val PREFS_NAME = "ble_key_mouse_prefs"
         private const val KEY_PREFERRED_DEVICE_ADDRESS = "preferred_device_address"
+        private const val KEY_AUTO_CONNECT_ENABLED = "auto_connect_enabled"
+        private const val KEY_AUTO_CONNECT_DEVICE_ADDRESS = "auto_connect_device_address"
 
         // Reconnect backoff parameters
         private const val RECONNECT_INITIAL_DELAY_MS = 2_000L
@@ -109,8 +111,15 @@ class BluetoothHidService : Service() {
     }
 
     private fun restorePreferredDevice(): BluetoothDevice? {
-        val savedAddress = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .getString(KEY_PREFERRED_DEVICE_ADDRESS, null) ?: return null
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val autoConnectEnabled = prefs.getBoolean(KEY_AUTO_CONNECT_ENABLED, false)
+        val savedAddress = if (autoConnectEnabled) {
+            prefs.getString(KEY_AUTO_CONNECT_DEVICE_ADDRESS, null)
+                ?: prefs.getString(KEY_PREFERRED_DEVICE_ADDRESS, null)
+        } else {
+            prefs.getString(KEY_PREFERRED_DEVICE_ADDRESS, null)
+        } ?: return null
+
         return try {
             if (BluetoothAdapter.checkBluetoothAddress(savedAddress)) {
                 bluetoothAdapter.getRemoteDevice(savedAddress)
@@ -207,6 +216,7 @@ class BluetoothHidService : Service() {
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+            addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         }
         registerReceiver(connectionReceiver, intentFilter)
 

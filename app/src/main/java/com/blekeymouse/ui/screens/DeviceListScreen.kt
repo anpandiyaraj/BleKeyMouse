@@ -65,10 +65,14 @@ fun DeviceListScreen(viewModel: MainViewModel) {
     val pairedDevices by viewModel.pairedDevices.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val isServiceRunning by viewModel.isServiceRunning.collectAsStateWithLifecycle()
+    val autoConnectAddress by viewModel.autoConnectDeviceAddress.collectAsStateWithLifecycle()
 
-    // Animate items in on first composition
+    // Animate items in on first composition and refresh paired devices list
     var listVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { listVisible = true }
+    LaunchedEffect(Unit) {
+        viewModel.refreshPairedDevices()
+        listVisible = true
+    }
 
     val connectedAddress = (connectionState as? ConnectionState.Connected)?.deviceAddress
 
@@ -178,12 +182,17 @@ fun DeviceListScreen(viewModel: MainViewModel) {
                                 slideInVertically(tween(300 + index * 80)) { 30 }
                     ) {
                         val isActive = device.address == connectedAddress
+                        val isAutoConnectTarget = device.address.equals(autoConnectAddress, ignoreCase = true)
                         DeviceCard(
-                            deviceName        = try { device.name ?: device.address } catch (e: SecurityException) { device.address },
-                            deviceAddress     = device.address,
-                            connectionState   = connectionState,
-                            isThisDeviceActive = isActive,
-                            onConnectClick    = { viewModel.connectTo(device) }
+                            deviceName           = try { device.name ?: device.address } catch (e: SecurityException) { device.address },
+                            deviceAddress        = device.address,
+                            connectionState      = connectionState,
+                            isThisDeviceActive   = isActive,
+                            isAutoConnectTarget  = isAutoConnectTarget,
+                            onAutoConnectToggle  = { checked ->
+                                viewModel.setAutoConnectDevice(device.address, checked)
+                            },
+                            onConnectClick       = { viewModel.connectTo(device) }
                         )
                     }
                 }

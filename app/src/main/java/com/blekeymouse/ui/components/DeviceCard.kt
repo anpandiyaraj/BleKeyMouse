@@ -43,11 +43,14 @@ import com.blekeymouse.ui.theme.GreenConnected
 import com.blekeymouse.ui.theme.SurfaceElevated
 import com.blekeymouse.ui.theme.TextSecondary
 
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+
 /**
  * Card representing a single paired Bluetooth device.
  *
- * Shows the device name, MAC address, a connection state badge,
- * and a "Connect" button when not already connected to this device.
+ * Shows the device name, MAC address, connection state badge,
+ * an Auto-Connect option checkbox, and a "Connect" button.
  */
 @Composable
 fun DeviceCard(
@@ -55,17 +58,21 @@ fun DeviceCard(
     deviceAddress: String,
     connectionState: ConnectionState,
     isThisDeviceActive: Boolean,
+    isAutoConnectTarget: Boolean,
+    onAutoConnectToggle: (Boolean) -> Unit,
     onConnectClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val cardAlpha by animateFloatAsState(
-        targetValue = if (isThisDeviceActive) 1f else 0.8f,
+        targetValue = if (isThisDeviceActive || isAutoConnectTarget) 1f else 0.85f,
         animationSpec = tween(300),
         label = "cardAlpha"
     )
 
     val borderBrush = if (isThisDeviceActive) {
         Brush.linearGradient(listOf(GradientStart, GradientEnd))
+    } else if (isAutoConnectTarget) {
+        Brush.linearGradient(listOf(CyanGlow.copy(alpha = 0.5f), BorderSubtle))
     } else {
         Brush.linearGradient(listOf(BorderSubtle, BorderSubtle))
     }
@@ -77,101 +84,129 @@ fun DeviceCard(
             .clip(RoundedCornerShape(16.dp))
             .background(SurfaceElevated)
             .border(
-                width = if (isThisDeviceActive) 1.5.dp else 1.dp,
+                width = if (isThisDeviceActive || isAutoConnectTarget) 1.5.dp else 1.dp,
                 brush = borderBrush,
                 shape = RoundedCornerShape(16.dp)
             )
             .padding(16.dp)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            // ── Device Icon ──────────────────────────────────────────────
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (isThisDeviceActive)
-                            Brush.radialGradient(listOf(CyanGlow.copy(alpha = 0.2f), CyanGlow.copy(alpha = 0f)))
-                        else
-                            Brush.radialGradient(listOf(BorderSubtle.copy(alpha = 0.3f), BorderSubtle.copy(alpha = 0f)))
-                    )
+        Column {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
-                    imageVector = when {
-                        connectionState is ConnectionState.Connected && isThisDeviceActive ->
-                            Icons.Rounded.BluetoothConnected
-                        connectionState is ConnectionState.Disconnected ->
-                            Icons.Rounded.BluetoothDisabled
-                        else -> Icons.Rounded.Bluetooth
-                    },
-                    contentDescription = null,
-                    tint = if (isThisDeviceActive) CyanGlow else TextSecondary,
-                    modifier = Modifier.size(22.dp)
-                )
+                // ── Device Icon ──────────────────────────────────────────────
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isThisDeviceActive)
+                                Brush.radialGradient(listOf(CyanGlow.copy(alpha = 0.2f), CyanGlow.copy(alpha = 0f)))
+                            else
+                                Brush.radialGradient(listOf(BorderSubtle.copy(alpha = 0.3f), BorderSubtle.copy(alpha = 0f)))
+                        )
+                ) {
+                    Icon(
+                        imageVector = when {
+                            connectionState is ConnectionState.Connected && isThisDeviceActive ->
+                                Icons.Rounded.BluetoothConnected
+                            connectionState is ConnectionState.Disconnected ->
+                                Icons.Rounded.BluetoothDisabled
+                            else -> Icons.Rounded.Bluetooth
+                        },
+                        contentDescription = null,
+                        tint = if (isThisDeviceActive || isAutoConnectTarget) CyanGlow else TextSecondary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(14.dp))
+
+                // ── Device Info ──────────────────────────────────────────────
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = deviceName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = deviceAddress,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    StatusBadge(connectionState = if (isThisDeviceActive) connectionState else ConnectionState.Disconnected)
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                // ── Connect Button ───────────────────────────────────────────
+                if (!isThisDeviceActive) {
+                    Button(
+                        onClick = onConnectClick,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CyanGlow.copy(alpha = 0.15f),
+                            contentColor = CyanGlow
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Text(
+                            text = "Connect",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                } else {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        // Pulsing connected dot
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(GreenConnected)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Active",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = GreenConnected,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.width(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // ── Device Info ──────────────────────────────────────────────
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = deviceName,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = deviceAddress,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                StatusBadge(connectionState = if (isThisDeviceActive) connectionState else ConnectionState.Disconnected)
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            // ── Connect Button ───────────────────────────────────────────
-            if (!isThisDeviceActive) {
-                Button(
-                    onClick = onConnectClick,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = CyanGlow.copy(alpha = 0.15f),
-                        contentColor = CyanGlow
+            // ── Auto Connect Option Box ────────────────────────────────────
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Checkbox(
+                    checked = isAutoConnectTarget,
+                    onCheckedChange = onAutoConnectToggle,
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = CyanGlow,
+                        uncheckedColor = BorderSubtle,
+                        checkmarkColor = MaterialTheme.colorScheme.surface
                     ),
-                    shape = RoundedCornerShape(10.dp),
-                ) {
-                    Text(
-                        text = "Connect",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            } else {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    // Pulsing connected dot
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(GreenConnected)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Active",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = GreenConnected,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isAutoConnectTarget) "Auto-Connect Enabled (Cold Start)" else "Enable Auto-Connect on startup",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (isAutoConnectTarget) CyanGlow else TextSecondary,
+                    fontWeight = if (isAutoConnectTarget) FontWeight.SemiBold else FontWeight.Normal
+                )
             }
         }
     }

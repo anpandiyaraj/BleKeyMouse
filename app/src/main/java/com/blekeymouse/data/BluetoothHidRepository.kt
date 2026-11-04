@@ -10,13 +10,18 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import android.util.Log
 import com.blekeymouse.service.BluetoothHidService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 
 /**
  * Repository abstracting all Bluetooth HID operations from the UI/ViewModel layer.
@@ -41,6 +46,8 @@ class BluetoothHidRepository(private val appContext: Context) {
         private const val TAG = "BluetoothHidRepository"
         private const val PREFS_NAME = "ble_key_mouse_prefs"
         private const val KEY_PREFERRED_DEVICE_ADDRESS = "preferred_device_address"
+        private const val KEY_AUTO_CONNECT_ENABLED = "auto_connect_enabled"
+        private const val KEY_AUTO_CONNECT_DEVICE_ADDRESS = "auto_connect_device_address"
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -53,6 +60,9 @@ class BluetoothHidRepository(private val appContext: Context) {
 
     private val _isServiceRunning = MutableStateFlow(false)
     val isServiceRunning: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
+
+    private val _autoConnectDeviceAddress = MutableStateFlow<String?>(getAutoConnectDeviceAddressInternal())
+    val autoConnectDeviceAddress: StateFlow<String?> = _autoConnectDeviceAddress.asStateFlow()
 
     // Pending device to connect to once service finishes binding
     @Volatile
@@ -79,6 +89,47 @@ class BluetoothHidRepository(private val appContext: Context) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Auto-Connect Preferences
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun getAutoConnectDeviceAddressInternal(): String? {
+        val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val enabled = prefs.getBoolean(KEY_AUTO_CONNECT_ENABLED, false)
+        if (!enabled) return null
+        return prefs.getString(KEY_AUTO_CONNECT_DEVICE_ADDRESS, null)
+    }
+
+    fun isAutoConnectEnabled(): Boolean {
+        return appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_AUTO_CONNECT_ENABLED, false)
+    }
+
+    fun getAutoConnectDeviceAddress(): String? = getAutoConnectDeviceAddressInternal()
+
+    fun setAutoConnectDevice(deviceAddress: String, enabled: Boolean) {
+        val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (enabled) {
+            prefs.edit()
+                .putBoolean(KEY_AUTO_CONNECT_ENABLED, true)
+                .putString(KEY_AUTO_CONNECT_DEVICE_ADDRESS, deviceAddress)
+                .putString(KEY_PREFERRED_DEVICE_ADDRESS, deviceAddress)
+                .apply()
+            _autoConnectDeviceAddress.value = deviceAddress
+            Log.i(TAG, "setAutoConnectDevice: enabled for $deviceAddress")
+        } else {
+            val current = prefs.getString(KEY_AUTO_CONNECT_DEVICE_ADDRESS, null)
+            if (current == deviceAddress) {
+                prefs.edit()
+                    .putBoolean(KEY_AUTO_CONNECT_ENABLED, false)
+                    .remove(KEY_AUTO_CONNECT_DEVICE_ADDRESS)
+                    .apply()
+                _autoConnectDeviceAddress.value = null
+                Log.i(TAG, "setAutoConnectDevice: disabled for $deviceAddress")
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Service Control
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -96,15 +147,10 @@ class BluetoothHidRepository(private val appContext: Context) {
 
     /**
      * Unbinds and stops the foreground HID service.
-     * Clears the preferred device, stopping auto-reconnect.
      */
     fun stopService() {
         Log.i(TAG, "stopService")
         pendingConnectDevice = null
-        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .remove(KEY_PREFERRED_DEVICE_ADDRESS)
-            .apply()
         try {
             appContext.unbindService(serviceConnection)
         } catch (e: IllegalArgumentException) {
@@ -116,21 +162,32 @@ class BluetoothHidRepository(private val appContext: Context) {
     }
 
     /**
-     * Checks whether a preferred target device address was saved previously.
+     * Checks whether auto-connect is set for a device.
      */
     fun hasPreferredDevice(): Boolean {
-        val savedAddress = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_PREFERRED_DEVICE_ADDRESS, null)
-        return !savedAddress.isNullOrBlank()
+        return !getAutoConnectDeviceAddressInternal().isNullOrBlank()
     }
 
     /**
-     * Auto-starts the HID service if a preferred device was saved from a previous session.
+     * Starts the HID service by default on app launch so the HID profile is enabled
+     * and ready. If an auto-connect device is enabled, initiates connection to it.
      */
     fun autoConnectIfPossible() {
-        if (hasPreferredDevice()) {
-            Log.i(TAG, "autoConnectIfPossible: preferred device saved — auto-starting HID service")
-            startService()
+        Log.i(TAG, "autoConnectIfPossible: enabling HID service by default on app launch")
+        startService()
+
+        val autoDevice = getAutoConnectDeviceAddressInternal()
+        if (isAutoConnectEnabled() && !autoDevice.isNullOrBlank()) {
+            Log.i(TAG, "autoConnectIfPossible: Auto-Connect enabled for $autoDevice — initiating connection")
+            val btManager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+            val device = try {
+                btManager.adapter?.getRemoteDevice(autoDevice)
+            } catch (e: Exception) {
+                null
+            }
+            if (device != null) {
+                connectToDevice(device)
+            }
         }
     }
 
@@ -193,18 +250,56 @@ class BluetoothHidRepository(private val appContext: Context) {
     // Device Operations
     // ─────────────────────────────────────────────────────────────────────────
 
+    private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val _pairedDevicesFlow = MutableStateFlow<List<BluetoothDevice>>(emptyList())
+    val pairedDevicesFlow: StateFlow<List<BluetoothDevice>> = _pairedDevicesFlow.asStateFlow()
+
+    private val bondStateReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.d(TAG, "Bluetooth event received (${intent.action}) — refreshing paired devices")
+            refreshPairedDevices()
+            repoScope.launch {
+                delay(500)
+                refreshPairedDevices()
+            }
+        }
+    }
+
+    init {
+        try {
+            val filter = android.content.IntentFilter().apply {
+                addAction(android.bluetooth.BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+                addAction(android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED)
+                addAction(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED)
+            }
+            appContext.registerReceiver(bondStateReceiver, filter)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register bondStateReceiver", e)
+        }
+        refreshPairedDevices()
+    }
+
     /**
-     * Returns the list of Bluetooth-paired (bonded) devices.
-     * The ViewModel displays these in the paired device list screen.
+     * Queries the Bluetooth adapter for currently bonded devices and updates the reactive flow.
+     */
+    fun refreshPairedDevices(): List<BluetoothDevice> {
+        val btManager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val devices = try {
+            btManager.adapter?.bondedDevices?.toList() ?: emptyList()
+        } catch (e: SecurityException) {
+            Log.e(TAG, "refreshPairedDevices: BLUETOOTH_CONNECT permission missing", e)
+            emptyList()
+        }
+        _pairedDevicesFlow.value = devices
+        return devices
+    }
+
+    /**
+     * Returns the set of Bluetooth-paired (bonded) devices.
      */
     fun getPairedDevices(): Set<BluetoothDevice> {
-        val btManager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        return try {
-            btManager.adapter?.bondedDevices ?: emptySet()
-        } catch (e: SecurityException) {
-            Log.e(TAG, "getPairedDevices: BLUETOOTH_CONNECT permission missing", e)
-            emptySet()
-        }
+        return refreshPairedDevices().toSet()
     }
 
     /**

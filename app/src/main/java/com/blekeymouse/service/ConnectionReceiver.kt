@@ -107,6 +107,15 @@ class ConnectionReceiver(
             }
 
             // ──────────────────────────────────────────────────────────────
+            // Bond state changed — log pairing/unpairing event
+            // ──────────────────────────────────────────────────────────────
+            BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                val device: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
+                Log.i(TAG, "ACTION_BOND_STATE_CHANGED: device=${device?.address}, bondState=$bondState")
+            }
+
+            // ──────────────────────────────────────────────────────────────
             // Bluetooth adapter state changed — Edge Case Fix #3
             // ──────────────────────────────────────────────────────────────
             BluetoothAdapter.ACTION_STATE_CHANGED -> {

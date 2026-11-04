@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Manages the [BluetoothHidDevice] profile proxy lifecycle, app registration,
@@ -82,8 +83,19 @@ class HidProfileManager(
             _isAppRegistered.value = registered
             if (!registered) {
                 _connectionState.value = ConnectionState.Disconnected
-            } else if (_connectionState.value is ConnectionState.Registering) {
-                _connectionState.value = ConnectionState.Disconnected
+            } else {
+                if (_connectionState.value == ConnectionState.Registering) {
+                    _connectionState.value = ConnectionState.Disconnected
+                }
+                if (pluggedDevice != null) {
+                    connectedHost = pluggedDevice
+                    reportSender.attach(hidDevice!!)
+                    _connectionState.value = ConnectionState.Connected(
+                        deviceName = try { pluggedDevice.name ?: pluggedDevice.address } catch (e: SecurityException) { pluggedDevice.address },
+                        deviceAddress = pluggedDevice.address
+                    )
+                    onDeviceConnected(pluggedDevice)
+                }
             }
         }
 
@@ -184,43 +196,90 @@ class HidProfileManager(
 
     /**
      * Initiates the profile proxy acquisition chain.
-     * Must be called from [BluetoothHidService.onCreate].
+     * Retries up to 3 times if [BluetoothAdapter.getProfileProxy] returns false on startup.
      *
      * [BluetoothAdapter.getProfileProxy] requires a non-null Context on all API levels.
      *
-     * @return false if the device does not support the HID_DEVICE profile.
+     * @return false if the device does not support the HID_DEVICE profile after retries.
      */
     fun initialize(context: android.content.Context): Boolean {
         Log.i(TAG, "initialize: requesting HID_DEVICE profile proxy")
-        return bluetoothAdapter.getProfileProxy(
-            context,
-            profileServiceListener,
-            BluetoothProfile.HID_DEVICE
-        ).also { supported ->
-            if (!supported) Log.e(TAG, "initialize: HID_DEVICE profile not supported on this device")
+        var success = false
+        var attempts = 0
+        while (!success && attempts < 3) {
+            attempts++
+            try {
+                success = bluetoothAdapter.getProfileProxy(
+                    context,
+                    profileServiceListener,
+                    BluetoothProfile.HID_DEVICE
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "getProfileProxy exception on attempt #$attempts", e)
+            }
+            if (!success && attempts < 3) {
+                Log.w(TAG, "getProfileProxy returned false on attempt #$attempts — retrying after delay")
+                try {
+                    Thread.sleep(1000)
+                } catch (_: InterruptedException) {}
+            }
         }
+        if (!success) {
+            Log.e(TAG, "initialize: HID_DEVICE profile not supported or proxy request failed")
+        }
+        return success
     }
 
 
     /**
      * Registers our HID app with the Bluetooth stack using the combined descriptor.
-     *
-     * IMPORTANT: This is asynchronous. [_isAppRegistered] will be set true only inside
-     * [hidCallback.onAppStatusChanged]. Do NOT call connect() until that flag is set.
      */
     private fun registerApp() {
         val hid = hidDevice ?: run {
             Log.e(TAG, "registerApp: hidDevice is null — proxy not yet connected")
+            _connectionState.value = ConnectionState.Error("HID Proxy Disconnected")
             return
         }
         Log.i(TAG, "registerApp: registering HID application with Bluetooth stack")
-        hid.registerApp(
-            /* sdpSettings = */ HidDescriptors.buildSdpSettings(),
-            /* inQos       = */ null,
-            /* outQos      = */ HidDescriptors.buildQosSettings(),
-            /* executor    = */ callbackExecutor,
-            /* callback    = */ hidCallback
-        )
+
+        try {
+            // Unregister any previous stale instance before registering
+            hid.unregisterApp()
+        } catch (e: Exception) {
+            Log.d(TAG, "registerApp: unregisterApp cleanup ignored", e)
+        }
+
+        val success = try {
+            hid.registerApp(
+                /* sdpSettings = */ HidDescriptors.buildSdpSettings(),
+                /* inQos       = */ null,
+                /* outQos      = */ HidDescriptors.buildQosSettings(),
+                /* executor    = */ callbackExecutor,
+                /* callback    = */ hidCallback
+            )
+        } catch (e: SecurityException) {
+            Log.e(TAG, "registerApp: missing BLUETOOTH_CONNECT permission", e)
+            _connectionState.value = ConnectionState.Error("Permission denied")
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "registerApp: exception during registerApp", e)
+            _connectionState.value = ConnectionState.Error("Registration failed")
+            false
+        }
+
+        if (!success) {
+            Log.e(TAG, "registerApp returned false!")
+            _connectionState.value = ConnectionState.Error("HID registration failed")
+        } else {
+            // Schedule safety timeout: if system callback doesn't fire within 3s, transition out of Registering
+            Executors.newSingleThreadScheduledExecutor().schedule({
+                if (_connectionState.value == ConnectionState.Registering) {
+                    Log.w(TAG, "registerApp: callback timed out after 3s — forcing state to Disconnected")
+                    _isAppRegistered.value = true
+                    _connectionState.value = ConnectionState.Disconnected
+                }
+            }, 3, TimeUnit.SECONDS)
+        }
     }
 
     /**

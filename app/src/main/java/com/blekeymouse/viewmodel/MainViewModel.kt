@@ -8,7 +8,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.blekeymouse.data.BluetoothHidRepository
 import com.blekeymouse.data.ConnectionState
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,22 +64,20 @@ class MainViewModel(
         )
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Paired Devices
+    // Paired Devices — automatically reacts to system bond state changes
     // ─────────────────────────────────────────────────────────────────────────
 
-    private val _pairedDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
-    val pairedDevices: StateFlow<List<BluetoothDevice>> = _pairedDevices.asStateFlow()
-
-    init {
-        refreshPairedDevices()
-    }
+    val pairedDevices: StateFlow<List<BluetoothDevice>> = repository.pairedDevicesFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList()
+        )
 
     /** Refreshes the paired devices list from the Bluetooth adapter. */
     fun refreshPairedDevices() {
         viewModelScope.launch {
-            val devices = repository.getPairedDevices().toList()
-            Log.d(TAG, "refreshPairedDevices: found ${devices.size} bonded devices")
-            _pairedDevices.value = devices
+            repository.refreshPairedDevices()
         }
     }
 
@@ -102,6 +99,17 @@ class MainViewModel(
     /** Auto-connects on cold launch if a preferred target device is saved. */
     fun autoConnectIfPossible() {
         repository.autoConnectIfPossible()
+    }
+
+    val autoConnectDeviceAddress: StateFlow<String?> = repository.autoConnectDeviceAddress
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = repository.getAutoConnectDeviceAddress()
+        )
+
+    fun setAutoConnectDevice(deviceAddress: String, enabled: Boolean) {
+        repository.setAutoConnectDevice(deviceAddress, enabled)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -175,9 +183,21 @@ class MainViewModel(
         repository.sendMouseReport(dx = 0, dy = 0, wheel = delta)
     }
 
+    /** Sends a horizontal scroll wheel event via Shift+Wheel modifier. Positive [delta] = scroll right. */
+    fun sendHorizontalScroll(delta: Int) {
+        repository.sendKeyboardReport(modifier = 0x02, keycodes = emptyList())
+        repository.sendMouseReport(dx = 0, dy = 0, wheel = delta)
+        repository.sendKeyRelease()
+    }
+
+    /** Sends Escape key (USB HID keycode 0x29). Acts as ESC on PC and Back button on Android. */
+    fun sendEscapeKey() {
+        sendKeyCombo(modifier = 0, keycodes = listOf(0x29))
+    }
+
     /**
      * Sends a keyboard key combo.
-     * @param modifier Modifier bitmask (see [HidDescriptors] docs)
+     * @param modifier Modifier bitmask
      * @param keycodes USB HID keycodes (up to 6)
      */
     fun sendKeyCombo(modifier: Int = 0, keycodes: List<Int> = emptyList()) {

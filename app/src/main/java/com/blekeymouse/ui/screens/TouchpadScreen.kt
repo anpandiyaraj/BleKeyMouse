@@ -25,6 +25,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Mouse
 import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material.icons.rounded.UnfoldMore
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -146,7 +149,7 @@ fun TouchpadScreen(viewModel: MainViewModel) {
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Scroll strip (right side)
+            // Scroll strip (vertical right side)
             ScrollStrip(
                 enabled = isConnected,
                 onScroll = { delta -> viewModel.sendScroll(delta) },
@@ -156,14 +159,25 @@ fun TouchpadScreen(viewModel: MainViewModel) {
             )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // ── Click Buttons ────────────────────────────────────────────────
+        // ── Horizontal Scroll Strip ──────────────────────────────────────
+        HorizontalScrollStrip(
+            enabled = isConnected,
+            onScroll = { delta -> viewModel.sendHorizontalScroll(delta) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // ── Click & ESC/Back Buttons ──────────────────────────────────────
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(64.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                .height(60.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             ClickButton(
                 label = "Left Click",
@@ -179,6 +193,18 @@ fun TouchpadScreen(viewModel: MainViewModel) {
                     viewModel.sendLeftClick()
                 },
                 modifier = Modifier.weight(1f)
+            )
+            ClickButton(
+                label = "ESC / Back",
+                enabled = isConnected,
+                onButtonDown = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                },
+                onButtonUp = {},
+                onClick = {
+                    viewModel.sendEscapeKey()
+                },
+                modifier = Modifier.weight(0.85f)
             )
             ClickButton(
                 label = "Right Click",
@@ -323,7 +349,7 @@ private fun TouchpadSurface(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Scroll Strip
+// Scroll Strip — Mouse Scroll Wheel
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -332,37 +358,162 @@ private fun ScrollStrip(
     onScroll: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var accumScrollY by remember { mutableStateOf(0f) }
+
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))
             .background(SurfaceDark)
-            .border(1.dp, BorderSubtle, RoundedCornerShape(20.dp))
+            .border(
+                1.dp,
+                if (enabled) CyanGlow.copy(alpha = 0.3f) else BorderSubtle,
+                RoundedCornerShape(20.dp)
+            )
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    val scrollDelta = -(dragAmount.y / 30f).roundToInt() // invert: up = positive scroll
-                    if (scrollDelta != 0) onScroll(scrollDelta)
-                }
+                detectDragGestures(
+                    onDragStart = { accumScrollY = 0f },
+                    onDragEnd = { accumScrollY = 0f },
+                    onDragCancel = { accumScrollY = 0f },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        accumScrollY += dragAmount.y
+                        // Responsive scroll step threshold (10px per notch)
+                        val scrollThreshold = 10f
+                        if (kotlin.math.abs(accumScrollY) >= scrollThreshold) {
+                            val steps = (accumScrollY / scrollThreshold).toInt()
+                            accumScrollY -= steps * scrollThreshold
+                            // Invert y: dragging finger UP (negative dragAmount.y) scrolls UP (positive wheel)
+                            onScroll(-steps)
+                        }
+                    }
+                )
             }
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(3.dp)
+            verticalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(vertical = 12.dp)
         ) {
-            repeat(5) { index ->
-                Box(
-                    modifier = Modifier
-                        .width(16.dp)
-                        .height(2.dp)
-                        .clip(RoundedCornerShape(1.dp))
-                        .background(
-                            if (enabled) CyanGlow.copy(alpha = 0.3f + index * 0.07f)
-                            else GrayMuted.copy(alpha = 0.2f)
-                        )
+            Icon(
+                imageVector = Icons.Rounded.UnfoldMore,
+                contentDescription = "Scroll Wheel",
+                tint = if (enabled) CyanGlow else GrayMuted.copy(alpha = 0.4f),
+                modifier = Modifier.size(18.dp)
+            )
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                repeat(4) { index ->
+                    Box(
+                        modifier = Modifier
+                            .width(14.dp)
+                            .height(2.dp)
+                            .clip(RoundedCornerShape(1.dp))
+                            .background(
+                                if (enabled) CyanGlow.copy(alpha = 0.3f + index * 0.15f)
+                                else GrayMuted.copy(alpha = 0.2f)
+                            )
+                    )
+                }
+            }
+
+            Text(
+                text = "SCROLL",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.sp),
+                color = if (enabled) CyanGlow.copy(alpha = 0.7f) else GrayMuted.copy(alpha = 0.4f),
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Horizontal Scroll Strip — Horizontal Pan Wheel
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun HorizontalScrollStrip(
+    enabled: Boolean,
+    onScroll: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var accumScrollX by remember { mutableStateOf(0f) }
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(SurfaceDark)
+            .border(
+                1.dp,
+                if (enabled) CyanGlow.copy(alpha = 0.3f) else BorderSubtle,
+                RoundedCornerShape(14.dp)
+            )
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectDragGestures(
+                    onDragStart = { accumScrollX = 0f },
+                    onDragEnd = { accumScrollX = 0f },
+                    onDragCancel = { accumScrollX = 0f },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        accumScrollX += dragAmount.x
+                        val scrollThreshold = 12f
+                        if (kotlin.math.abs(accumScrollX) >= scrollThreshold) {
+                            val steps = (accumScrollX / scrollThreshold).toInt()
+                            accumScrollX -= steps * scrollThreshold
+                            onScroll(steps)
+                        }
+                    }
                 )
             }
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.UnfoldMore,
+                contentDescription = "Horizontal Scroll",
+                tint = if (enabled) CyanGlow else GrayMuted.copy(alpha = 0.4f),
+                modifier = Modifier
+                    .size(18.dp)
+                    .graphicsLayer(rotationZ = 90f)
+            )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                repeat(6) { index ->
+                    Box(
+                        modifier = Modifier
+                            .height(14.dp)
+                            .width(2.dp)
+                            .clip(RoundedCornerShape(1.dp))
+                            .background(
+                                if (enabled) CyanGlow.copy(alpha = 0.3f + index * 0.10f)
+                                else GrayMuted.copy(alpha = 0.2f)
+                            )
+                    )
+                }
+            }
+
+            Text(
+                text = "H-SCROLL",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.sp),
+                color = if (enabled) CyanGlow.copy(alpha = 0.7f) else GrayMuted.copy(alpha = 0.4f),
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }

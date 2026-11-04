@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() {
         bluetoothEnabled = btManager.adapter?.isEnabled == true
         Log.i(TAG, "Enable BT result: bluetoothEnabled=$bluetoothEnabled")
         if (bluetoothEnabled && permissionsGranted) {
+            viewModel.refreshPairedDevices()
             viewModel.autoConnectIfPossible()
         }
     }
@@ -135,6 +136,7 @@ class MainActivity : ComponentActivity() {
         bluetoothEnabled = btManager.adapter?.isEnabled == true
         Log.i(TAG, "checkBluetoothEnabledAndAutoConnect: $bluetoothEnabled")
         if (bluetoothEnabled && permissionsGranted) {
+            viewModel.refreshPairedDevices()
             viewModel.autoConnectIfPossible()
         }
     }
